@@ -1,0 +1,27 @@
+[
+    {
+        "type": "image",
+        "context": "",
+        "imageUrl": "./img/0.jpg"
+    },
+    {
+        "type": "image",
+        "context": "",
+        "imageUrl": "./img/1.jpg"
+    },
+    {
+        "type": "image",
+        "context": "",
+        "imageUrl": "./img/2.jpg"
+    },
+    {
+        "type": "text+image",
+        "context": "점심으로 이거먹음 ㅎㅎ",
+        "imageUrl": "./img/3.jpg"
+    },
+    {
+        "type": "text+image",
+        "context": "최악이다 오늘",
+        "imageUrl": "./img/4.jpg"
+    }
+]
