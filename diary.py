@@ -1,14 +1,13 @@
+# diary.py
 from google import genai
 from google.genai import types
 import json
 import requests
 import os
+import io
 import shutil
 from PIL import Image
 
-# ─────────────────────────────────────────────────────────
-# 기본 설정
-# ─────────────────────────────────────────────────────────
 API_KEY = os.getenv("GOOGLE_API_KEY")
 if not API_KEY:
     raise RuntimeError("❌ GOOGLE_API_KEY not found in environment variables")
@@ -16,149 +15,114 @@ if not API_KEY:
 client = genai.Client(api_key=API_KEY)
 model = "gemini-2.5-flash-lite"  # 또는 "gemini-2.5-flash"
 
-
 # ─────────────────────────────────────────────────────────
-# 이미지 다운로드 함수
+# 유틸: 이미지 다운로드
 # ─────────────────────────────────────────────────────────
 def _dwn(url: str, file_name: str) -> str:
-    """
-    주어진 URL에서 이미지를 다운로드해 ./img 폴더에 저장하고 경로를 반환
-    """
     os.makedirs("./img", exist_ok=True)
     save_path = f"./img/{file_name}"
-
     try:
-        response = requests.get(url, stream=True, timeout=20)
-        if response.status_code == 200:
-            with open(save_path, 'wb') as file:
-                response.raw.decode_content = True
-                shutil.copyfileobj(response.raw, file)
-            print(f"✅ 이미지 저장 완료: {save_path}")
-            return save_path
-        else:
-            raise RuntimeError(f"이미지 다운로드 실패 (status: {response.status_code})")
+        r = requests.get(url, stream=True, timeout=20)
+        if r.status_code != 200:
+            raise RuntimeError(f"이미지 다운로드 실패 (status: {r.status_code})")
+        with open(save_path, "wb") as f:
+            r.raw.decode_content = True
+            shutil.copyfileobj(r.raw, f)
+        return save_path
     except Exception as e:
-        raise RuntimeError(f"이미지 다운로드 중 오류 발생: {e}")
-
+        raise RuntimeError(f"이미지 다운로드 오류: {e}")
 
 # ─────────────────────────────────────────────────────────
-# JSON 파일에서 이미지 URL 읽고 로컬 이미지로 변환
+# JSON 파일에서 presigned URL → 로컬 파일 경로로 치환
 # ─────────────────────────────────────────────────────────
 def _read_url(path: str) -> str:
-    """
-    response.json 파일을 읽고, 내부의 imageUrl을 실제 파일 경로로 교체.
-    새로운 JSON(new_response.json) 경로 반환
-    """
-    os.makedirs("./img", exist_ok=True)
-
     try:
-        with open(path, 'r', encoding='utf-8') as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:
         raise RuntimeError(f"❌ JSON 파일 읽기 실패: {e}")
 
-    # diaries[0].recordList 안쪽 접근
-    data = data['diaries'][0]
+    data = data["diaries"][0]
     record_list = data["recordList"]
 
-    # imageUrl 리스트 수집
     urls = [rec.get("imageUrl") for rec in record_list if rec.get("imageUrl")]
-
-    # 이미지 다운로드
-    img_paths = []
+    local_paths = []
     for idx, u in enumerate(urls):
-        file_name = f"{idx}.jpg"
-        img_paths.append(_dwn(u, file_name))
+        local_paths.append(_dwn(u, f"{idx}.jpg"))
 
-    # recordList 내부에 실제 파일 경로 매핑
     i = 0
     for rec in record_list:
         if rec.get("imageUrl"):
-            rec["imageUrl"] = img_paths[i]
+            rec["imageUrl"] = local_paths[i]
             i += 1
-            if i >= len(img_paths):
+            if i >= len(local_paths):
                 break
 
-    # 새로운 JSON 저장
     new_path = "./new_response.json"
-    with open(new_path, 'w', encoding='utf-8') as f:
+    with open(new_path, "w", encoding="utf-8") as f:
         json.dump(record_list, f, indent=4, ensure_ascii=False)
-
     return new_path
 
+# ─────────────────────────────────────────────────────────
+# 유틸: PIL Image → JPEG 바이트(토큰 절약 위해 리사이즈)
+# ─────────────────────────────────────────────────────────
+def _image_to_bytes(img: Image.Image, max_w=1080, quality=70) -> bytes:
+    if img.width > max_w:
+        r = max_w / img.width
+        img = img.resize((max_w, int(img.height * r)), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, format="JPEG", optimize=True, quality=quality)
+    return buf.getvalue()
 
 # ─────────────────────────────────────────────────────────
-# 이미지/텍스트를 모델 입력 형식으로 재조합
+# 모델 입력 contents 구성
 # ─────────────────────────────────────────────────────────
 def _put_content(file_path: str):
-    """
-    JSON 파일(recordList)을 읽어 Gemini 모델 입력 형식(contents)으로 변환
-    """
-    
-
     with open(file_path, "r", encoding="utf-8") as f:
-        d = json.load(f)
+        d = json.load(f)  # d = recordList
 
-    l = []
-    for rec in d:
-        t = rec.get("type")
-        ctx = rec.get("context") or ""
-
-        if t in ("image", "text+image") and rec.get("imageUrl"):
-            try:
-                img = Image.open(rec["imageUrl"])
-                l.append([ctx, img])
-            except Exception as e:
-                print(f"⚠️ 이미지 로드 실패: {rec['imageUrl']} ({e})")
-                l.append([ctx, None])
-        else:
-            l.append([ctx, None])
-
-    # 모델이 이해할 수 있도록 이벤트 블럭으로 구분
+    contents = []
     evs = "------이벤트 블럭 시작--------"
     eve = "------이벤트 블럭 종료--------"
-    con = []
-    for ctx, img in l:
-        con.append(evs)
-        con.append(ctx)
-        if img is not None:
-            con.append(img)
-        con.append(eve)
-    return con
 
+    any_text_or_image = False
 
-# ─────────────────────────────────────────────────────────
-# 메인 함수: Gemini 호출
-# ─────────────────────────────────────────────────────────
-def get_response(json_file: str, persona: int = 0) -> str:
-    """
-    response.json 파일 경로를 받아, Google Gemini로 일기 생성 요청
-    """
-    # 1. 이미지 URL → 로컬 이미지로 교체
-    processed_path = _read_url(json_file)
+    for rec in d:
+        t = rec.get("type")
+        ctx = (rec.get("context") or "").strip()
+        path = rec.get("imageUrl")
 
-    # 2. 모델 입력 준비
-    contents = _put_content(processed_path)
+        contents.append(evs)
+        # 텍스트가 있으면 추가
+        if ctx:
+            contents.append(ctx)
+            any_text_or_image = True
 
-    # 3. 생성 설정
-    config = types.GenerateContentConfig(
-        system_instruction=_set_persona(persona),
-        temperature=0.9,
-        max_output_tokens=4096
-    )
+        # 이미지가 있으면 바이트로 추가 (PIL 객체 대신 바이트로 주입)
+        if t in ("image", "text+image") and path:
+            try:
+                img = Image.open(path)
+                img.load()
+                img_bytes = _image_to_bytes(img)
+                contents.append(img_bytes)
+                any_text_or_image = True
+            except Exception as e:
+                # 이미지 로드 실패는 무시하고 넘어감(텍스트만으로 진행)
+                pass
 
-    # 4. Gemini 호출
+        contents.append(eve)
+
+    # 모든 텍스트/이미지가 비어있다면 최소 한 줄 넣어줌
+    if not any_text_or_image:
+        contents = ["사용자가 남긴 기록이 거의 없어요. 아주 짧게 오늘 하루를 상상해서 한 단락의 일기로 정리해줘."]
+
+    # 디버깅 도움용(서버 로그)
     try:
-        response = client.models.generate_content(
-            model=model,
-            config=config,
-            contents=contents
-        )
-        print("✅ Gemini 응답 성공")
-        return response.text
-    except Exception as e:
-        raise RuntimeError(f"❌ Gemini 호출 실패: {e}")
+        print(f"[diary] contents_len={len(contents)}  has_any={any_text_or_image}")
+    except Exception:
+        pass
 
+    return contents
 
 # ─────────────────────────────────────────────────────────
 # 페르소나 설정
@@ -212,8 +176,31 @@ def _set_persona(num: int) -> str:
 
 
 # ─────────────────────────────────────────────────────────
-# 독립 실행 테스트
+# 메인: Gemini 호출
 # ─────────────────────────────────────────────────────────
+def get_response(json_file: str, persona: int = 0) -> str:
+    processed_path = _read_url(json_file)
+    contents = _put_content(processed_path)
+
+    if not contents:
+        # 최후 방어
+        contents = ["사용자 기록이 비어 있습니다. 오늘의 일기를 한 단락으로 간단히 작성해줘."]
+
+    config = types.GenerateContentConfig(
+        system_instruction=_set_persona(persona),
+        temperature=0.9,
+        max_output_tokens=4096,
+    )
+    try:
+        resp = client.models.generate_content(
+            model=model,
+            config=config,
+            contents=contents,
+        )
+        return resp.text
+    except Exception as e:
+        raise RuntimeError(f"❌ Gemini 호출 실패: {e}")
+
 if __name__ == "__main__":
     json_file = "./response.json"
     result = get_response(json_file, persona=0)
