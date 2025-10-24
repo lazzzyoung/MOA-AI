@@ -1,27 +1,17 @@
 [
     {
-        "type": "image",
-        "context": "",
+        "type": "text",
+        "context": "아하 마이크 테스트 학교 가는 중",
+        "imageUrl": null
+    },
+    {
+        "type": "text+image",
+        "context": "내일 발표자료야ㅎㅎㅎ 잘만든것같아서뿌듯",
         "imageUrl": "./img/0.jpg"
     },
     {
-        "type": "image",
-        "context": "",
-        "imageUrl": "./img/1.jpg"
-    },
-    {
-        "type": "image",
-        "context": "",
-        "imageUrl": "./img/2.jpg"
-    },
-    {
-        "type": "text+image",
-        "context": "점심으로 이거먹음 ㅎㅎ",
-        "imageUrl": "./img/3.jpg"
-    },
-    {
-        "type": "text+image",
-        "context": "최악이다 오늘",
-        "imageUrl": "./img/4.jpg"
+        "type": "text",
+        "context": "내일이 대회라 너무 떨리네",
+        "imageUrl": null
     }
 ]
